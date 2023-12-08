@@ -1,7 +1,7 @@
 {
     "ID": "2f4e384e-76ce-45c3-aea2-b16f5e5c328f",
     "ActionKeyword": "ar",
-    "Name": "AutoRender",
+    "Name": "FlowAutoRender",
     "Description": "Searchs Portal 2 autorender site",
     "Author": "Rex",
     "Version": "1.0.0",
