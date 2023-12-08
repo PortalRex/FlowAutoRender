@@ -6,7 +6,7 @@
     "Author": "Rex",
     "Version": "1.0.0",
     "Language": "python",
-    "Website": "https://github.com/PortalRex/FlowRender",
+    "Website": "https://github.com/PortalRex/FlowAutoRender",
     "IcoPath": "assets\\app.png",
     "ExecuteFileName": "main.py"
 }
