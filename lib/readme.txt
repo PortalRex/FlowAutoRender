@@ -1,0 +1,1 @@
+drop dependencies in lib folder
