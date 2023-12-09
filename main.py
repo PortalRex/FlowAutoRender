@@ -8,9 +8,10 @@ from flowlauncher import FlowLauncher
 import webbrowser
 import requests
 requests.packages.urllib3.util.connection.HAS_IPV6 = False
+requests.packages.urllib3.disable_warnings()
 
 class AutoRenderSearch(FlowLauncher):
- 
+  
     def format_time(self, time_hundredths):
         if time_hundredths is None:
             return "Unknown Time"
@@ -49,7 +50,7 @@ class AutoRenderSearch(FlowLauncher):
         try:
             search_string = query.replace(' ', '+')
             url = f'https://autorender.portal2.sr/api/v1/search?q={search_string}'
-            r = s.get(url)
+            r = s.get(url, verify=False)
             
             results = r.json()['results']
             if results:
