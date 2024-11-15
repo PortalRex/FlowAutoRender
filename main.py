@@ -16,12 +16,14 @@ class AutoRenderSearch(FlowLauncher):
         if time_hundredths is None:
             return "Unknown Time"
         total_seconds = time_hundredths / 100
-        minutes, seconds = divmod(total_seconds, 60)
-        formatted_time = f"{int(seconds)}.{'' if seconds != 1 else ''}{int((total_seconds % 1) * 100)}"
-
+        minutes, seconds = divmod(total_seconds,60)
+        
+        formatted_seconds = f"{int(seconds)}"
+        fractional_part =f"{int((total_seconds % 1) * 100):02}"
+        formatted_time = f"{formatted_seconds}.{fractional_part}"
         if minutes >= 1:
-            formatted_time = f"{int(minutes)}:{'s' if minutes != 1 else ''} " + formatted_time
-
+                formatted_time = f"{int(minutes)}:{formatted_time}"
+                
         return formatted_time
 
     def fetch_result(self, query, result):
@@ -31,7 +33,7 @@ class AutoRenderSearch(FlowLauncher):
         comment = result.get('comment', '')
         original_rank = result.get('orig_rank')
         map_id = result.get('map')
-        autorender_url = f'https://autorender.portal2.sr/videos/{video}'
+        autorender_url = f'https://autorender.p2sr.org/videos/{video}'
         default_thumbnail_path = r"assets\app.png"
         formatted_time = self.format_time(time_hundredths)
         subtitle = f"User: {user} | Rank: {original_rank} | Comment: {comment}"
@@ -49,7 +51,7 @@ class AutoRenderSearch(FlowLauncher):
     def query(self, query):
         try:
             search_string = query.replace(' ', '+')
-            url = f'https://autorender.portal2.sr/api/v1/search?q={search_string}'
+            url = f'https://autorender.p2sr.org/api/v1/search?q={search_string}'
             r = s.get(url, verify=False)
             
             results = r.json()['results']
