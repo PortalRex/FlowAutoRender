@@ -17,13 +17,11 @@ class AutoRenderSearch(FlowLauncher):
             return "Unknown Time"
         total_seconds = time_hundredths / 100
         minutes, seconds = divmod(total_seconds,60)
-        
         formatted_seconds = f"{int(seconds)}"
         fractional_part =f"{int((total_seconds % 1) * 100):02}"
         formatted_time = f"{formatted_seconds}.{fractional_part}"
         if minutes >= 1:
                 formatted_time = f"{int(minutes)}:{formatted_time}"
-                
         return formatted_time
 
     def fetch_result(self, query, result):
