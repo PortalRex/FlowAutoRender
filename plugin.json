@@ -1,12 +1,12 @@
 {
-    "ID": "2f4e384e-76ce-45c3-aea2-b16f5e5c328f",
-    "ActionKeyword": "ar",
+    "ID": "2a76ad4e-e2b6-4ae7-a35e-d0e3d7488be7",
     "Name": "FlowAutoRender",
     "Description": "Searches Portal 2 autorender site",
     "Author": "Rex",
     "Version": "1.0.0",
     "Language": "python",
     "Website": "https://github.com/PortalRex/FlowAutoRender",
-    "IcoPath": "assets\\app.png",
-    "ExecuteFileName": "main.py"
+    "IcoPath": "assets\\icon.png",
+    "ExecuteFileName": "main.py",
+    "ActionKeyword": "ar"
 }
