@@ -1,6 +1,7 @@
 import sys,os
 import concurrent.futures
 import urllib.parse
+from datetime import datetime, timezone
 from difflib import SequenceMatcher, get_close_matches
 
 parent_folder_path = os.path.abspath(os.path.dirname(__file__))
@@ -606,6 +607,20 @@ class AutoRenderSearch(FlowLauncher):
 
         return best_score
 
+    def parse_result_date(self, result):
+        date_str = result.get('date')
+        if not date_str:
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+        normalized = date_str.strip()
+        if normalized.endswith('Z'):
+            normalized = normalized[:-1] + '+00:00'
+
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError:
+            return datetime.min.replace(tzinfo=timezone.utc)
+
     def request_results(self, query_text):
         search_string = urllib.parse.quote_plus(query_text)
         url = f'https://autorender.p2sr.org/api/v1/search?q={search_string}'
@@ -687,10 +702,15 @@ class AutoRenderSearch(FlowLauncher):
 
         return entries[0]
 
-    def format_ticks(self, ticks):
+    def coerce_ticks(self, ticks):
         try:
-            ticks_int = int(ticks)
+            return int(ticks)
         except (TypeError, ValueError):
+            return None
+
+    def format_ticks(self, ticks):
+        ticks_int = self.coerce_ticks(ticks)
+        if ticks_int is None:
             return "Unknown"
 
         seconds_total = ticks_int / _TICKS_PER_SECOND
@@ -700,6 +720,20 @@ class AutoRenderSearch(FlowLauncher):
         if minutes:
             return f"{minutes}:{seconds:05.2f}"
         return f"{seconds:.2f}s"
+
+    def ticks_to_seconds(self, ticks):
+        ticks_int = self.coerce_ticks(ticks)
+        if ticks_int is None:
+            return None
+
+        return ticks_int / _TICKS_PER_SECOND
+
+    def format_total_seconds(self, ticks):
+        seconds = self.ticks_to_seconds(ticks)
+        if seconds is None:
+            return "Unknown seconds"
+
+        return f"{seconds:.3f}s"
 
     def format_split_summary(self, splits):
         if not splits:
@@ -789,6 +823,7 @@ class AutoRenderSearch(FlowLauncher):
             "rank": original_rank,
             "profile_number": result.get('user_id'),
             "source_domain": source_domain,
+            "map_id": result.get('map_id'),
         }
 
         changelog_id = result.get('id') or result.get('board_changelog_id')
@@ -816,9 +851,14 @@ class AutoRenderSearch(FlowLauncher):
 
             def build_items(result_set, query_text):
                 query_for_similarity = query_text.lower()
+                def sort_key(result):
+                    date_value = self.parse_result_date(result)
+                    similarity = self.calculate_similarity(query_for_similarity, result)
+                    return (date_value, similarity)
+
                 sorted_results = sorted(
                     result_set,
-                    key=lambda result: self.calculate_similarity(query_for_similarity, result),
+                    key=sort_key,
                     reverse=True,
                 )
 
@@ -877,6 +917,67 @@ class AutoRenderSearch(FlowLauncher):
                 }
             ]
 
+    def build_demo_url(self, source_domain, changelog_id):
+        if not changelog_id or not source_domain:
+            return None
+
+        source_lower = source_domain.lower()
+        if source_lower == 'board.portal2.sr':
+            return f'https://board.portal2.sr/getDemo?id={changelog_id}'
+
+        return None
+
+    def build_source_map_url(self, source_domain, map_id, map_alias):
+        if not source_domain:
+            return None
+
+        source_lower = source_domain.lower()
+        if source_lower == 'board.portal2.sr':
+            if map_id:
+                return f'https://board.portal2.sr/map/{map_id}'
+            if map_alias:
+                encoded_alias = urllib.parse.quote_plus(map_alias)
+                return f'https://board.portal2.sr/?search={encoded_alias}'
+
+        if source_domain.startswith(('http://', 'https://')):
+            return source_domain
+
+        return f'https://{source_domain}'
+
+    def build_context_quick_actions(self, data):
+        items = []
+
+        source_domain = data.get('source_domain')
+        map_alias = data.get('map_alias')
+        map_id = data.get('map_id')
+        changelog_id = data.get('board_changelog_id')
+
+        source_url = self.build_source_map_url(source_domain, map_id, map_alias)
+        if source_url:
+            items.append({
+                "Title": "Open source map",
+                "SubTitle": source_url,
+                "IcoPath": _ICON_PATH,
+                "JsonRPCAction": {
+                    "method": "open_url",
+                    "parameters": [source_url],
+                },
+            })
+
+        demo_url = self.build_demo_url(source_domain, changelog_id)
+        if demo_url:
+            items.append({
+                "Title": "Download demo",
+                "SubTitle": demo_url,
+                "IcoPath": _ICON_PATH,
+                "JsonRPCAction": {
+                    "method": "open_url",
+                    "parameters": [demo_url],
+                },
+            })
+
+        return items
+
     def context_menu(self, data):
         if not isinstance(data, dict):
             return [{
@@ -885,6 +986,7 @@ class AutoRenderSearch(FlowLauncher):
                 "IcoPath": _ICON_PATH,
             }]
 
+        quick_action_items = self.build_context_quick_actions(data)
         map_alias = data.get('map_alias')
         map_name = data.get('map_name')
         game_dir = data.get('game_dir')
@@ -905,39 +1007,42 @@ class AutoRenderSearch(FlowLauncher):
                 game_dir = game_dir or resolved.get('game_dir')
 
         if map_name is None or game_dir is None or rank is None:
-            return [{
+            fallback = [{
                 "Title": "MTrigger data unavailable",
                 "SubTitle": "Missing map metadata or rank to query autorender.",
                 "IcoPath": _ICON_PATH,
             }]
+            return quick_action_items + fallback if quick_action_items else fallback
 
         try:
             payload = self.fetch_mtrigger_stats(game_dir, map_name, rank, profile_number)
         except requests.exceptions.RequestException as exc:
-            return [{
+            error_items = quick_action_items + [{
                 "Title": "MTrigger request failed",
                 "SubTitle": f"{exc}",
                 "IcoPath": _ICON_PATH,
             }]
+            return error_items
         except ValueError as exc:
-            return [{
+            error_items = quick_action_items + [{
                 "Title": "MTrigger response error",
                 "SubTitle": f"{exc}",
                 "IcoPath": _ICON_PATH,
             }]
+            return error_items
 
         entries = []
         if isinstance(payload, dict):
             entries = payload.get('data') or []
 
         if not entries:
-            return [{
+            return quick_action_items + [{
                 "Title": "No mtrigger segments",
                 "SubTitle": "Autorender did not return SAR mtrigger data for this run.",
                 "IcoPath": _ICON_PATH,
             }]
 
-        items = []
+        items = list(quick_action_items)
         for entry in entries:
             entry_rank = entry.get('board_rank', rank)
             entry_profile = entry.get('board_profile_number')
@@ -970,12 +1075,30 @@ class AutoRenderSearch(FlowLauncher):
                 })
                 continue
 
+            running_total_ticks = 0
+            total_ticks_valid = True
+
             for index, segment in enumerate(segments, start=1):
                 segment_name = segment.get('name') or f"Segment {index}"
                 segment_ticks = segment.get('ticks')
-                segment_title = f"{segment_name} — {self.format_ticks(segment_ticks)}"
+                segment_ticks_int = self.coerce_ticks(segment_ticks)
+
+                if segment_ticks_int is None:
+                    total_ticks_valid = False
+                elif total_ticks_valid:
+                    running_total_ticks += segment_ticks_int
+
+                total_ticks_for_display = running_total_ticks if total_ticks_valid else None
+                segment_display_seconds = self.format_total_seconds(segment_ticks_int)
+                cumulative_seconds = self.format_total_seconds(total_ticks_for_display)
+                segment_title = f"{segment_name} — {cumulative_seconds}"
                 splits = segment.get('splits') or []
-                subtitle_parts = [f"Ticks: {segment_ticks if segment_ticks is not None else 'Unknown'}"]
+                subtitle_parts = [
+                    f"Segment seconds: {segment_display_seconds}"
+                    if segment_display_seconds != "Unknown seconds"
+                    else "Segment seconds: Unknown"
+                ]
+
                 if splits:
                     subtitle_parts.append(self.format_split_summary(splits))
                 else:
