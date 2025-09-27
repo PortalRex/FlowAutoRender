@@ -1,5 +1,5 @@
 # FlowAutoRender
-![desktop](https://github.com/user-attachments/assets/e2bcb044-7747-417b-8639-2561f3ec2340)
+![desktop](https://github.com/user-attachments/assets/a8860153-6459-4c71-808f-bcc3331320ed)
  Searches [Portal 2 autorender](https://autorender.p2sr.org) in FlowLauncher
 
 To install download release - make a new folder in AppData\Roaming\FlowLauncher\Plugins\ and extract zip there and restart FlowLauncher
