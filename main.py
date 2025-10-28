@@ -934,7 +934,7 @@ class AutoRenderSearch(FlowLauncher):
         source_lower = source_domain.lower()
         if source_lower == 'board.portal2.sr':
             if map_id:
-                return f'https://board.portal2.sr/map/{map_id}'
+                return f'https://board.portal2.sr/chamber/{map_id}'
             if map_alias:
                 encoded_alias = urllib.parse.quote_plus(map_alias)
                 return f'https://board.portal2.sr/?search={encoded_alias}'
