@@ -569,6 +569,7 @@ _FUZZY_IGNORE_TOKENS = {
 }
 BOARD_DOMAIN_TO_GAME_DIR = {
     'board.portal2.sr': 'portal2',
+    'mel.portal2.sr': 'portal_stories',
     'mel.board.portal2.sr': 'portal_stories',
 }
 PREFERRED_GAME_DIR_ORDER = [
@@ -623,7 +624,7 @@ class AutoRenderSearch(FlowLauncher):
 
     def request_results(self, query_text):
         search_string = urllib.parse.quote_plus(query_text)
-        url = f'https://autorender.p2sr.org/api/v1/search?q={search_string}'
+        url = f'https://autorender.portal2.sr/api/v1/search?q={search_string}'
         response = s.get(url, timeout=5)
         response.raise_for_status()
 
@@ -757,7 +758,7 @@ class AutoRenderSearch(FlowLauncher):
         if profile_number:
             params['include_pb_of'] = profile_number
 
-        response = s.get('https://autorender.p2sr.org/api/v1/mtriggers/search', params=params, timeout=5)
+        response = s.get('https://autorender.portal2.sr/api/v1/mtriggers/search', params=params, timeout=5)
         response.raise_for_status()
         return response.json()
 
@@ -809,7 +810,7 @@ class AutoRenderSearch(FlowLauncher):
         }
 
         if share_id:
-            autorender_url = f'https://autorender.p2sr.org/videos/{share_id}'
+            autorender_url = f'https://autorender.portal2.sr/videos/{share_id}'
             item["JsonRPCAction"] = {
                 "method": "open_url",
                 "parameters": [autorender_url]
@@ -924,6 +925,8 @@ class AutoRenderSearch(FlowLauncher):
         source_lower = source_domain.lower()
         if source_lower == 'board.portal2.sr':
             return f'https://board.portal2.sr/getDemo?id={changelog_id}'
+        if source_lower in ('mel.portal2.sr', 'mel.board.portal2.sr'):
+            return f'https://mel.portal2.sr/getDemo?id={changelog_id}'
 
         return None
 
@@ -938,6 +941,12 @@ class AutoRenderSearch(FlowLauncher):
             if map_alias:
                 encoded_alias = urllib.parse.quote_plus(map_alias)
                 return f'https://board.portal2.sr/?search={encoded_alias}'
+        if source_lower in ('mel.portal2.sr', 'mel.board.portal2.sr'):
+            if map_id:
+                return f'https://mel.portal2.sr/chamber/{map_id}'
+            if map_alias:
+                encoded_alias = urllib.parse.quote_plus(map_alias)
+                return f'https://mel.portal2.sr/?search={encoded_alias}'
 
         if source_domain.startswith(('http://', 'https://')):
             return source_domain
@@ -1051,7 +1060,7 @@ class AutoRenderSearch(FlowLauncher):
             header_parts = [f"Rank #{entry_rank}"]
             if entry_profile:
                 header_parts.append(f"Profile {entry_profile}")
-            header_title = " – ".join(header_parts)
+            header_title = " - ".join(header_parts)
             header_subtitle_parts = []
             if entry_changelog is not None:
                 header_subtitle_parts.append(f"Changelog ID: {entry_changelog}")
