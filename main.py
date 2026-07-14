@@ -567,6 +567,14 @@ _FUZZY_IGNORE_TOKENS = {
     'player',
     'run',
 }
+_FUZZY_DROP_TOKENS = {
+    'mel',
+    'portal2',
+    'p2',
+    'p2sr',
+    'stories',
+    'portal_stories',
+}
 BOARD_DOMAIN_TO_GAME_DIR = {
     'board.portal2.sr': 'portal2',
     'mel.portal2.sr': 'portal_stories',
@@ -583,6 +591,57 @@ PREFERRED_GAME_DIR_ORDER = [
 _TICKS_PER_SECOND = 60.0
 
 class AutoRenderSearch(FlowLauncher):
+
+    def normalize_query_tokens(self, query, keep_modifiers=False):
+        tokens = []
+        for token in query.lower().split():
+            if token in _FUZZY_DROP_TOKENS:
+                continue
+            if not keep_modifiers and token in _FUZZY_IGNORE_TOKENS:
+                continue
+            tokens.append(token)
+        return ' '.join(tokens)
+
+    def fuzzy_alias_score(self, candidate, alias):
+        candidate = candidate.lower()
+        alias = alias.lower()
+        candidate_compact = candidate.replace(' ', '')
+        alias_compact = alias.replace(' ', '')
+
+        if candidate == alias:
+            return 1.0
+        if candidate_compact == alias_compact:
+            return 0.98
+        if candidate in alias or alias in candidate:
+            return 0.92
+
+        return max(
+            SequenceMatcher(None, candidate, alias).ratio(),
+            SequenceMatcher(None, candidate_compact, alias_compact).ratio(),
+        )
+
+    def best_alias_span(self, tokens):
+        best = None
+
+        for start in range(len(tokens)):
+            for end in range(start + 1, len(tokens) + 1):
+                candidate = ' '.join(tokens[start:end])
+                for alias in MAP_ALIASES:
+                    score = self.fuzzy_alias_score(candidate, alias)
+                    token_count = end - start
+                    adjusted_score = score + min(token_count, 3) * 0.025
+                    current = (adjusted_score, score, token_count, start, end, alias)
+                    if best is None or current > best:
+                        best = current
+
+        if best is None:
+            return None
+
+        _adjusted_score, score, _token_count, start, end, alias = best
+        if score < 0.72:
+            return None
+
+        return alias, start, end
   
     def calculate_similarity(self, query, result):
         if not query:
@@ -594,7 +653,7 @@ class AutoRenderSearch(FlowLauncher):
             if value:
                 fields.append(str(value))
 
-        query_lower = query.lower()
+        query_lower = self.normalize_query_tokens(query) or query.lower()
         best_score = 0
 
         for field in fields:
@@ -639,44 +698,53 @@ class AutoRenderSearch(FlowLauncher):
         def token_has_digit(token):
             return any(char.isdigit() for char in token)
 
-        filtered_tokens = []
-        modifiers = []
+        searchable_tokens = []
+        carried_tokens = []
         for token in normalized_tokens:
+            if token in _FUZZY_DROP_TOKENS:
+                continue
             if token in _FUZZY_IGNORE_TOKENS or token_has_digit(token):
-                modifiers.append(token)
+                carried_tokens.append(token)
             else:
-                filtered_tokens.append(token)
+                searchable_tokens.append(token)
+
+        span_match = self.best_alias_span(searchable_tokens)
+        if span_match:
+            alias, start, end = span_match
+            modifiers = [
+                *searchable_tokens[:start],
+                *searchable_tokens[end:],
+                *carried_tokens,
+            ]
+            return alias, modifiers
 
         candidates = []
-
         def add_candidate(text):
             text = ' '.join(text.split()).strip()
             if text and text not in candidates:
                 candidates.append(text)
 
-        add_candidate(' '.join(normalized_tokens))
+        if searchable_tokens:
+            add_candidate(' '.join(searchable_tokens))
+            add_candidate(' '.join(reversed(searchable_tokens)))
+            add_candidate(' '.join(sorted(searchable_tokens)))
 
-        if filtered_tokens:
-            add_candidate(' '.join(filtered_tokens))
-            add_candidate(' '.join(reversed(filtered_tokens)))
-            add_candidate(' '.join(sorted(filtered_tokens)))
+            for length in range(len(searchable_tokens), 0, -1):
+                add_candidate(' '.join(searchable_tokens[:length]))
+                add_candidate(' '.join(searchable_tokens[-length:]))
 
-            for length in range(len(filtered_tokens), 0, -1):
-                add_candidate(' '.join(filtered_tokens[:length]))
-                add_candidate(' '.join(filtered_tokens[-length:]))
-
-            for token in filtered_tokens:
+            for token in searchable_tokens:
                 add_candidate(token)
 
         for candidate in candidates:
             match = get_close_matches(candidate, _MAP_ALIAS_TERMS, n=1, cutoff=0.6)
             if match:
-                return _MAP_ALIAS_LOOKUP[match[0]], modifiers
+                return _MAP_ALIAS_LOOKUP[match[0]], carried_tokens
 
             compact = candidate.replace(' ', '')
             match = get_close_matches(compact, _MAP_ALIAS_NO_SPACE_TERMS, n=1, cutoff=0.7)
             if match:
-                return _MAP_ALIAS_NO_SPACE_LOOKUP[match[0]], modifiers
+                return _MAP_ALIAS_NO_SPACE_LOOKUP[match[0]], carried_tokens
 
         return None
 
@@ -851,11 +919,11 @@ class AutoRenderSearch(FlowLauncher):
             results = self.request_results(active_query)
 
             def build_items(result_set, query_text):
-                query_for_similarity = query_text.lower()
+                query_for_similarity = self.normalize_query_tokens(query_text) or query_text.lower()
                 def sort_key(result):
                     date_value = self.parse_result_date(result)
                     similarity = self.calculate_similarity(query_for_similarity, result)
-                    return (date_value, similarity)
+                    return (similarity, date_value)
 
                 sorted_results = sorted(
                     result_set,
