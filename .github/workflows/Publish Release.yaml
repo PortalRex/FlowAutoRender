@@ -46,4 +46,6 @@ jobs:
         with:
           files: 'Flow.Launcher.Plugin.Portal2.Autorender.zip'
           tag_name: "${{ steps.generate_tag.outputs.tag }}"
+          # Tag the commit that was built, not the default branch.
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
