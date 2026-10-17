@@ -3,7 +3,7 @@
     "Name": "FlowAutoRender",
     "Description": "Searches Portal 2 autorender site",
     "Author": "Rex",
-    "Version": "1.0.0",
+    "Version": "1.1.0",
     "Language": "python",
     "Website": "https://github.com/PortalRex/FlowAutoRender",
     "IcoPath": "assets\\icon.png",
