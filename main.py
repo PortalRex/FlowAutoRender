@@ -575,6 +575,8 @@ _FUZZY_DROP_TOKENS = {
     'stories',
     'portal_stories',
 }
+# Boards to search, see API.md in p2sr/autorender. LP Hub runs are left out.
+SEARCH_BOARDS = 'portal2,mel'
 BOARD_DOMAIN_TO_GAME_DIR = {
     'board.portal2.sr': 'portal2',
     'mel.portal2.sr': 'portal_stories',
@@ -682,13 +684,20 @@ class AutoRenderSearch(FlowLauncher):
             return datetime.min.replace(tzinfo=timezone.utc)
 
     def request_results(self, query_text):
-        search_string = urllib.parse.quote_plus(query_text)
-        url = f'https://autorender.portal2.sr/api/v1/search?q={search_string}'
-        response = s.get(url, timeout=5)
+        response = s.get(
+            'https://autorender.portal2.sr/api/v1/search',
+            params={'q': query_text, 'source': SEARCH_BOARDS},
+            timeout=5,
+        )
         response.raise_for_status()
 
         payload = response.json()
-        return payload.get('results', [])
+        # Older API versions ignore the source parameter, so still drop LP Hub runs here.
+        return [
+            result for result in payload.get('results', [])
+            if result.get('board') != 'lphub'
+            and (result.get('source') or '').strip().lower() != 'lp.portal2.sr'
+        ]
 
     def suggest_query(self, query):
         normalized_tokens = [token for token in query.lower().split() if token]
