@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ env.python_ver }}
 
@@ -42,7 +42,7 @@ jobs:
           zip -r Flow.Launcher.Plugin.Portal2.Autorender.zip . -x '*.git*'
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: 'Flow.Launcher.Plugin.Portal2.Autorender.zip'
           tag_name: "${{ steps.generate_tag.outputs.tag }}"
