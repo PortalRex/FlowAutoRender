@@ -1,5 +1,5 @@
 import sys,os
-import concurrent.futures
+import time
 import urllib.parse
 from datetime import datetime, timezone
 from difflib import SequenceMatcher, get_close_matches
@@ -252,10 +252,11 @@ MAP_INFO = {
     'Flings': [
         {'name': 'mp_coop_fling_3', 'game_dir': 'portal2'},
     ],
+    # Single player and co-op share this name, so the board map id picks the right one.
     'Funnel Catch': [
         {'name': 'sp_a4_tb_catch', 'game_dir': 'Portal 2 Speedrun Mod'},
-        {'name': 'mp_coop_tbeam_catch_grind_1', 'game_dir': 'portal2'},
-        {'name': 'sp_a4_tb_catch', 'game_dir': 'portal2'},
+        {'name': 'sp_a4_tb_catch', 'game_dir': 'portal2', 'map_id': 47808},
+        {'name': 'mp_coop_tbeam_catch_grind_1', 'game_dir': 'portal2', 'map_id': 52665},
     ],
     'Funnel Drill': [
         {'name': 'mp_coop_tbeam_drill', 'game_dir': 'portal2'},
@@ -591,6 +592,11 @@ PREFERRED_GAME_DIR_ORDER = [
     'portal 2 speedrun mod',
 ]
 _TICKS_PER_SECOND = 60.0
+# (connect, read) timeouts. A keystroke can cost a search plus one suggestion search,
+# so both share _SEARCH_BUDGET seconds and the suggestion is skipped when it runs out.
+_REQUEST_TIMEOUT = (2, 3)
+_SEARCH_BUDGET = 4.0
+_MIN_SUGGESTION_TIME = 1.0
 
 class AutoRenderSearch(FlowLauncher):
 
@@ -683,19 +689,26 @@ class AutoRenderSearch(FlowLauncher):
         except ValueError:
             return datetime.min.replace(tzinfo=timezone.utc)
 
-    def request_results(self, query_text):
+    def request_results(self, query_text, timeout=_REQUEST_TIMEOUT):
         response = s.get(
             'https://autorender.portal2.sr/api/v1/search',
             params={'q': query_text, 'source': SEARCH_BOARDS},
-            timeout=5,
+            timeout=timeout,
         )
         response.raise_for_status()
 
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("search response is not a JSON object")
+        results = payload.get('results') or []
+        if not isinstance(results, list):
+            raise ValueError("search results are not a list")
+
         # Older API versions ignore the source parameter, so still drop LP Hub runs here.
         return [
-            result for result in payload.get('results', [])
-            if result.get('board') != 'lphub'
+            result for result in results
+            if isinstance(result, dict)
+            and result.get('board') != 'lphub'
             and (result.get('source') or '').strip().lower() != 'lp.portal2.sr'
         ]
 
@@ -757,10 +770,15 @@ class AutoRenderSearch(FlowLauncher):
 
         return None
 
-    def resolve_map_entry(self, alias, source_domain=None):
+    def resolve_map_entry(self, alias, source_domain=None, map_id=None):
         entries = MAP_INFO.get(alias)
         if not entries:
             return None
+
+        if map_id is not None:
+            for entry in entries:
+                if 'map_id' in entry and str(entry['map_id']) == str(map_id):
+                    return entry
 
         if source_domain:
             preferred = BOARD_DOMAIN_TO_GAME_DIR.get(source_domain.lower())
@@ -819,6 +837,8 @@ class AutoRenderSearch(FlowLauncher):
 
         parts = []
         for split in splits:
+            if not isinstance(split, dict):
+                continue
             name = split.get('name') or 'Split'
             ticks = split.get('ticks')
             parts.append(f"{name}: {self.format_ticks(ticks)}")
@@ -835,7 +855,7 @@ class AutoRenderSearch(FlowLauncher):
         if profile_number:
             params['include_pb_of'] = profile_number
 
-        response = s.get('https://autorender.portal2.sr/api/v1/mtriggers/search', params=params, timeout=5)
+        response = s.get('https://autorender.portal2.sr/api/v1/mtriggers/search', params=params, timeout=_REQUEST_TIMEOUT)
         response.raise_for_status()
         return response.json()
 
@@ -858,13 +878,13 @@ class AutoRenderSearch(FlowLauncher):
 
     def fetch_result(self, query, result):
         share_id = result.get('share_id')
-        user = result.get('user', 'Unknown User')
+        user = result.get('user') or 'Unknown User'
         time_hundredths = result.get('time', 0)
         comment = result.get('comment', '')
         original_rank = result.get('orig_rank')
-        map_alias = result.get('map', 'Unknown Map')
+        map_alias = result.get('map') or 'Unknown Map'
         source_domain = result.get('source')
-        map_entry = self.resolve_map_entry(map_alias, source_domain)
+        map_entry = self.resolve_map_entry(map_alias, source_domain, result.get('map_id'))
         default_thumbnail_path = _ICON_PATH
         formatted_time = self.format_time(time_hundredths)
         rank_text = original_rank if original_rank is not None else 'Unknown Rank'
@@ -924,6 +944,7 @@ class AutoRenderSearch(FlowLauncher):
             ]
 
         try:
+            started = time.monotonic()
             active_query = sanitized_query
             results = self.request_results(active_query)
 
@@ -940,12 +961,11 @@ class AutoRenderSearch(FlowLauncher):
                     reverse=True,
                 )
 
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    return [
-                        item
-                        for item in executor.map(lambda result: self.fetch_result(query_text, result), sorted_results)
-                        if item
-                    ]
+                return [
+                    item
+                    for item in (self.fetch_result(query_text, result) for result in sorted_results)
+                    if item
+                ]
 
             base_items = build_items(results, active_query) if results else []
             if base_items:
@@ -959,8 +979,14 @@ class AutoRenderSearch(FlowLauncher):
                 suggestion_query_parts = [suggested_term, *modifiers]
                 suggestion_query = ' '.join(part for part in suggestion_query_parts if part).strip()
 
-                if suggestion_query.lower() != sanitized_query.lower():
-                    suggestion_results = self.request_results(suggestion_query)
+                remaining = _SEARCH_BUDGET - (time.monotonic() - started)
+                if suggestion_query.lower() != sanitized_query.lower() and remaining < _MIN_SUGGESTION_TIME:
+                    subtitle = f"No videos found for '{sanitized_query}', try '{suggestion_query}'"
+                elif suggestion_query.lower() != sanitized_query.lower():
+                    suggestion_results = self.request_results(
+                        suggestion_query,
+                        timeout=(min(_REQUEST_TIMEOUT[0], remaining), remaining),
+                    )
                     suggestion_items = build_items(suggestion_results, suggestion_query) if suggestion_results else []
                     if suggestion_items:
                         return suggestion_items
@@ -977,7 +1003,8 @@ class AutoRenderSearch(FlowLauncher):
                 }
             ]
         except requests.exceptions.RequestException as exc:
-            print(f"Network error in query: {exc}")
+            # stdout carries the JSON-RPC reply, so diagnostics go to stderr.
+            print(f"Network error in query: {exc}", file=sys.stderr)
             return [
                 {
                     "Title": "Network error",
@@ -985,12 +1012,21 @@ class AutoRenderSearch(FlowLauncher):
                     "IcoPath": _ICON_PATH,
                 }
             ]
-        except ValueError as exc:
-            print(f"Error parsing response: {exc}")
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            print(f"Error parsing response: {exc}", file=sys.stderr)
             return [
                 {
                     "Title": "Unexpected response",
                     "SubTitle": "The autorender API returned data in an unexpected format",
+                    "IcoPath": _ICON_PATH,
+                }
+            ]
+        except Exception as exc:
+            print(f"Unexpected error in query: {exc}", file=sys.stderr)
+            return [
+                {
+                    "Title": "Search failed",
+                    "SubTitle": f"{type(exc).__name__}: {exc}",
                     "IcoPath": _ICON_PATH,
                 }
             ]
@@ -1077,6 +1113,7 @@ class AutoRenderSearch(FlowLauncher):
         map_name = data.get('map_name')
         game_dir = data.get('game_dir')
         source_domain = data.get('source_domain')
+        changelog_id = data.get('board_changelog_id')
 
         rank_value = data.get('rank')
         try:
@@ -1087,7 +1124,7 @@ class AutoRenderSearch(FlowLauncher):
         profile_number = data.get('profile_number')
 
         if (map_name is None or game_dir is None) and map_alias:
-            resolved = self.resolve_map_entry(map_alias, source_domain)
+            resolved = self.resolve_map_entry(map_alias, source_domain, data.get('map_id'))
             if resolved:
                 map_name = map_name or resolved.get('name')
                 game_dir = game_dir or resolved.get('game_dir')
@@ -1118,8 +1155,20 @@ class AutoRenderSearch(FlowLauncher):
             return error_items
 
         entries = []
-        if isinstance(payload, dict):
-            entries = payload.get('data') or []
+        if isinstance(payload, dict) and isinstance(payload.get('data'), list):
+            entries = [entry for entry in payload['data'] if isinstance(entry, dict)]
+
+        # The search goes by current board rank, so it returns whichever run holds that
+        # rank now. Only show the entry that belongs to this video's run.
+        if changelog_id is not None:
+            matching = [entry for entry in entries if str(entry.get('board_changelog_id')) == str(changelog_id)]
+            if entries and not matching:
+                return quick_action_items + [{
+                    "Title": "No mtrigger data for this run",
+                    "SubTitle": f"Rank #{rank} is now held by another run (changelog {entries[0].get('board_changelog_id')}).",
+                    "IcoPath": _ICON_PATH,
+                }]
+            entries = matching
 
         if not entries:
             return quick_action_items + [{
@@ -1165,6 +1214,8 @@ class AutoRenderSearch(FlowLauncher):
             total_ticks_valid = True
 
             for index, segment in enumerate(segments, start=1):
+                if not isinstance(segment, dict):
+                    continue
                 segment_name = segment.get('name') or f"Segment {index}"
                 segment_ticks = segment.get('ticks')
                 segment_ticks_int = self.coerce_ticks(segment_ticks)
